@@ -3,24 +3,29 @@ from glob import glob
 from PIL import Image
 from torchvision.transforms.functional import to_tensor
 from random import randint
+import os
 
 
 class _Dataset(Dataset):
-    def __init__(self, path, resolution=None, is_train=True):
+    def __init__(self, paths, resolution=None, is_train=True):
         super(_Dataset, self).__init__()
-        self.path = path
+        self.paths = paths
         self.resolution = resolution
         self.is_train = is_train
+
         if self.resolution is None:
             self.is_train = False
 
         self.img_list = []
+        for d in paths:
+            self.img_list += glob(os.path.join(d, '*.png'))
 
     def __len__(self):
         return len(self.img_list)
 
     def __getitem__(self, idx):
         img = self.img_list[idx]
+        name = os.path.basename(img)
         img = Image.open(img)
 
         # data augmentation
@@ -59,4 +64,4 @@ class _Dataset(Dataset):
 
         img = to_tensor(img)
 
-        return img
+        return img, name
