@@ -62,6 +62,13 @@ class _Dataset(Dataset):
 
             img = augmented_img
 
+        elif self.resolution is not None:
+            w, h = img.size
+            longer = max(w, h)
+            down_ratio = int(longer / self.resolution)
+            new_w, new_h = w // down_ratio, h // down_ratio
+            img = img.resize((new_w, new_h))
+
         img = to_tensor(img)
 
         return img, name

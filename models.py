@@ -4,6 +4,7 @@ from einops.layers.torch import Rearrange
 import torch.nn as nn
 import torch
 import numpy as np
+from torch.nn.functional import interpolate, pad
 
 # normalize (0, 1) to (-1, 1)
 def preprocess(t):
@@ -61,11 +62,12 @@ def postprocess(t):
 
 
 class My_ViT(nn.Module):
-    def __init__(self, latent_dim, dim, depth, heads, mlp_dim, channels=3, dim_head=64):
+    def __init__(self, latent_dim, dim, depth, heads, mlp_dim, patch_size=4, channels=3, dim_head=64, fill_mismatch='pad'):
         super(My_ViT, self).__init__()
+        self.patch_size = patch_size
         self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c h w -> b (h w) c'),
-            nn.Linear(channels + dim, dim)
+            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
+            nn.Linear((channels + dim) * patch_size * patch_size, dim)
         )
 
         spatial_dim = 2
@@ -81,6 +83,8 @@ class My_ViT(nn.Module):
             nn.Linear(dim, latent_dim)
         )
 
+        self.fill_mismatch = fill_mismatch
+
     def map_ff(self, x):
         x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
@@ -88,6 +92,18 @@ class My_ViT(nn.Module):
     def forward(self, img):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         b, c, h, w = img.shape
+
+        if (not h % self.patch_size == 0) or (not w % self.patch_size == 0):
+            if self.fill_mismatch == 'pad':
+                h_pad, w_pad = (h // self.patch_size + 1) * self.patch_size - h, (w // self.patch_size + 1) * self.patch_size - w
+                zero_pad_LRUD = (0, w_pad, 0, h_pad)  # pad size order: Left Right Up Down
+                img = pad(img, pad=zero_pad_LRUD)
+                b, c, h, w = img.shape
+            else:
+                refined_hw = round(h / self.patch_size) * self.patch_size, round(w / self.patch_size) * self.patch_size
+                img = interpolate(img, size=refined_hw, mode='bilinear', align_corners=False)
+                b, c, h, w = img.shape
+
         # rel_pos = uniform_coordinates(h, w, flatten=False).permute(2, 0, 1).unsqueeze(0).to(device)
         # rel_pos = repeat(rel_pos, '() c h w -> b c h w', b=b)
         rel_pos = uniform_coordinates(h, w, flatten=False).unsqueeze(0).to(device)
@@ -95,6 +111,7 @@ class My_ViT(nn.Module):
         ff = self.map_ff(rel_pos)
         bchw_ff = rearrange(ff, 'b h w c -> b c h w')
         x = torch.cat([img, bchw_ff], dim=1)
+
         x = self.to_patch_embedding(x)
         b, n, _ = x.shape
 
@@ -121,9 +138,14 @@ class MLP_Norm(nn.Module):
         self.beta_predictor = nn.Linear(out_dim, out_dim)
 
     def forward(self, x, latent):
-        latent = self.shared(latent)
-        gamma = self.gamma_predictor(latent)
-        beta = self.beta_predictor(latent)
+        shared_f = self.shared(latent)
+        # shared_f = latent
+        gamma = self.gamma_predictor(shared_f)
+        beta = self.beta_predictor(shared_f)
+
+        gamma = gamma.unsqueeze(1).unsqueeze(1)
+        beta = beta.unsqueeze(1).unsqueeze(1)
+
         x = x * gamma + beta
 
         return x
@@ -137,6 +159,10 @@ class MLP_Generator(nn.Module):
         norm_layers = []
         self.act = nn.GELU()
         self.channel_first = channel_first
+        # self.norm_shared = nn.Sequential(
+        #     nn.Linear(latent_dim, hidden_dim),
+        #     nn.GELU()
+        # )
         for i in range(self.num_layers):
             if i == 0:  # first layer
                 layers.append(nn.Linear(ff_dim, hidden_dim))
@@ -147,7 +173,7 @@ class MLP_Generator(nn.Module):
 
             else:  # middle layers
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
-                norm_layers.append(MLP_Norm(hidden_dim, hidden_dim))
+                norm_layers.append(MLP_Norm(latent_dim, hidden_dim))
 
         self.layers = nn.Sequential(*layers)
         self.norm_layers = nn.Sequential(*norm_layers)
@@ -168,9 +194,11 @@ class MLP_Generator(nn.Module):
 
     def forward(self, latent, ff):
         x = self.layers[0](ff)
+        # latent_shared = self.norm_shared(latent)
         for i in range(self.num_layers - 1):
             res = x
             x = self.norm_layers[i](x, latent)
+            # x = self.norm_layers[i](x, latent_shared)
             x = self.act(x)
             x = self.layers[i + 1](x)
             if i < self.num_layers - 2:

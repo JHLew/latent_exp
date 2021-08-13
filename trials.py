@@ -11,10 +11,6 @@ from torchvision.transforms.functional import to_pil_image
 
 def train(save_path):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    vit = My_ViT(latent_dim=256, dim=128, depth=4, heads=4, mlp_dim=64)
-    INR_G = MLP_Generator(num_layers=5, latent_dim=256, ff_dim=128, hidden_dim=64)
-    model = Wrapper(vit, INR_G)
-    model = nn.DataParallel(model).to(device)
 
     # hyper parameters
     n_epochs = 500
@@ -22,13 +18,31 @@ def train(save_path):
     lr = 1e-4
     batch_res = 256
 
+    # shared params
+    latent_dim = 256
+    ff_dim = 128
+
+    # ViT params
+    vit_layers = 6
+    vit_heads = 8
+    vit_mlp_dim = 64
+
+    # INR params
+    inr_layers = 5
+    inr_hidden_dim = 256
+
+    vit = My_ViT(latent_dim=latent_dim, dim=ff_dim, depth=vit_layers, heads=vit_heads, mlp_dim=vit_mlp_dim)
+    INR_G = MLP_Generator(num_layers=inr_layers, latent_dim=latent_dim, ff_dim=ff_dim, hidden_dim=inr_hidden_dim)
+    model = Wrapper(vit, INR_G)
+    model = nn.DataParallel(model).to(device)
+
     # paths
-    train_paths = ['/dataset/DIV2K/train_HR', '/dataset/Flickr2k/Flick2K_HR']
+    train_paths = ['/dataset/DIV2K/train_HR', '/dataset/Flickr2K/Flickr2K_HR']
     valid_paths = ['/dataset/DIV2K/valid_HR']
     valid_path = './valid'
 
     train_data = _Dataset(train_paths, resolution=batch_res, is_train=True)
-    valid_data = _Dataset(valid_paths, is_train=False)
+    valid_data = _Dataset(valid_paths, resolution=256, is_train=False)
 
     # dataloader
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=10)
@@ -60,23 +74,27 @@ def train(save_path):
 def validate(model, loader, valid_path, ep):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     loss = nn.MSELoss()
-    total_loss = 0
     n = len(loader.dataset)
 
-    os.makedirs(valid_path, exist_ok=True)
+    cur_valid_path = os.path.join(valid_path, f'{ep}')
+    os.makedirs(cur_valid_path, exist_ok=True)
 
-    for i, data in enumerate(loader):
-        gt, name = data
-        gt = gt.to(device)
-        with torch.no_grad():
+    with torch.no_grad():
+        total_loss = 0
+        for i, data in enumerate(loader):
+            gt, name = data
+            gt = gt.to(device)
             recon = model(gt)
+            if not recon.shape == gt.shape:
+                b, c, h, w = gt.shape
+                recon = recon[:b, :c, :h, :w]
             recon_loss = loss(recon, gt)
             total_loss += recon_loss.item()
 
-        # save reconstructed image
-        to_pil_image(recon[0].cpu()).save(os.path.join(valid_path, f'{ep}/{name[0]}'))
+            # save reconstructed image
+            to_pil_image(recon[0].cpu()).save(os.path.join(cur_valid_path, f'{name[0]}'))
 
-    avg_loss = total_loss / n
+        avg_loss = total_loss / n
     print(f'Validation loss at Epoch {ep}: {avg_loss}.')
 
 
