@@ -62,25 +62,26 @@ def postprocess(t):
 
 
 class My_ViT(nn.Module):
-    def __init__(self, latent_dim, dim, depth, heads, mlp_dim, patch_size=4, channels=3, dim_head=64, fill_mismatch='pad'):
+    def __init__(self, latent_dim, hidden_dim, ff_dim, depth, heads, mlp_dim, patch_size=4, channels=3, dim_head=64, fill_mismatch='pad'):
         super(My_ViT, self).__init__()
         self.patch_size = patch_size
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
-            nn.Linear((channels + dim) * patch_size * patch_size, dim)
+            nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim)
         )
 
         spatial_dim = 2
         sigma = 10
-        self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, dim // 2)) * sigma)
+        assert ff_dim % 2 == 0, 'Fourier features should be divided by 2.'
+        self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim // 2)) * sigma)
 
-        self.latent_token = nn.Parameter(torch.randn(1, 1, dim))
+        self.latent_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
-        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout=0)
+        self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim, dropout=0)
 
         self.mlp_head = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, latent_dim)
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, latent_dim)
         )
 
         self.fill_mismatch = fill_mismatch
