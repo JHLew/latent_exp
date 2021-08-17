@@ -36,12 +36,12 @@ class _Dataset(Dataset):
             w_size, h_size = randint(self.resolution, w), randint(self.resolution, h)
 
             # choose region
-            w_range, h_range = w - w_size, h - h_size
-            w_start, h_start = randint(0, w_range), randint(0, h_range)
-            w_end, h_end = w_start + w_range, h_start + h_range
+            w_max_start, h_max_start = w - w_size, h - h_size
+            w_start, h_start = randint(0, w_max_start), randint(0, h_max_start)
+            w_end, h_end = w_start + w_size, h_start + h_size
 
             # crop
-            augmented_img = img.crop((w_start, w_end, h_start, h_end))
+            augmented_img = img.crop((w_start, h_start, w_end, h_end))
 
             # resize
             augmented_img = augmented_img.resize((self.resolution, self.resolution))
@@ -54,11 +54,11 @@ class _Dataset(Dataset):
             # rotate
             rotate_flag = randint(0, 3)
             if rotate_flag == 1:
-                augmented_img = augmented_img.rotate(Image.ROTATE_90)
+                augmented_img = augmented_img.rotate(90)
             elif rotate_flag == 2:
-                augmented_img = augmented_img.rotate(Image.ROTATE_180)
+                augmented_img = augmented_img.rotate(180)
             elif rotate_flag == 3:
-                augmented_img = augmented_img.rotate(Image.ROTATE_270)
+                augmented_img = augmented_img.rotate(270)
 
             img = augmented_img
 
