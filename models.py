@@ -1,4 +1,4 @@
-from vit_pytorch.vit import Transformer, pair
+from vit_pytorch.vit import Transformer
 from einops import repeat, rearrange
 from einops.layers.torch import Rearrange
 import torch.nn as nn
