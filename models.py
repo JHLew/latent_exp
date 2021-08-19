@@ -212,13 +212,33 @@ class MLP_Generator(nn.Module):
 
 
 class Wrapper(nn.Module):
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder, decoder, ff_dim=None):
         super(Wrapper, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
 
+        self.own_ff = False
+        if ff_dim is not None:
+            self.own_ff = True
+            spatial_dim = 2
+            ff_dim = ff_dim
+            sigma = 10
+            self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim // 2)) * sigma)
+
+    def map_ff(self, x):
+        x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
     def forward(self, x):
-        latent, ff = self.encoder(x)
+        if not self.own_ff:
+            latent, ff = self.encoder(x)
+        else:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            latent = self.encoder(x)
+            b, c, h, w = x.shape
+            rel_pos = uniform_coordinates(h, w, flatten=False).unsqueeze(0).to(device)
+            rel_pos = repeat(rel_pos, '() h w c -> b h w c', b=b)
+            ff = self.map_ff(rel_pos)
         return self.decoder(latent, ff)
 
 

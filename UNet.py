@@ -16,20 +16,37 @@ def postprocess(t):
 
 
 class down(nn.Module):
-    def __init__(self, inChannels, outChannels, filterSize):
+    def __init__(self, inChannels, outChannels, filterSize, avgpool=True, latent_dim=None, spatial_size=None):
         super(down, self).__init__()
         # Initialize convolutional layers.
         self.conv1 = nn.Conv2d(inChannels, outChannels, filterSize, stride=1, padding=int((filterSize - 1) / 2))
         self.conv2 = nn.Conv2d(outChannels, outChannels, filterSize, stride=1, padding=int((filterSize - 1) / 2))
+        if avgpool:
+            self.pool = nn.AvgPool2d(2)
+        else:
+            self.pool = nn.Conv2d(inChannels, inChannels, kernel_size=2, stride=2, padding=1)
+
+        if latent_dim is not None and spatial_size is not None:
+            self.latent_extractor = nn.Conv2d(inChannels, latent_dim, spatial_size)
+            self.extract_latent = True
+        else:
+            self.extract_latent = False
 
     def forward(self, x):
         # Average pooling with kernel size 2 (2 x 2).
-        x = F.avg_pool2d(x, 2)
+        # x = F.avg_pool2d(x, 2)
+        if self.extract_latent:
+            latent = self.latent_extractor(x)
+
+        x = self.pool(x)
         # Convolution + Leaky ReLU
         x = F.leaky_relu(self.conv1(x), negative_slope=0.1)
         # Convolution + Leaky ReLU
         x = F.leaky_relu(self.conv2(x), negative_slope=0.1)
-        return x
+        if self.extract_latent:
+            return x, latent
+        else:
+            return x
 
 
 class up(nn.Module):
@@ -132,7 +149,7 @@ class UpNet(nn.Module):
         # Initialize neural network blocks.
         self.up0 = up(latent_dim, 512, False)  # 1 -> 2
         self.up1 = up(512, 512, False)  # 2 -> 4
-        self.up2 = up(512, 512, False)  # 4 -> 8
+        self.up2 = up(512, 512, False)  # 4 -> 8ffff
         self.up3 = up(512, 256, False)  # 8 -> 16
         self.up4 = up(256, 256, False)  # 16 -> 32
         self.up5 = up(256, 256, False)  # 32 -> 64
@@ -209,6 +226,41 @@ class modulated_UPNet(nn.Module):
         x = self.conv3(x)
 
         return postprocess(x)
-'''
-need spatially adaptive normalization - not global one.
-'''
+
+
+class Hier_Encoder(nn.Module):
+    def __init__(self, latent_dim):
+        super(Hier_Encoder, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, 7, stride=1, padding=3)
+        self.conv2 = nn.Conv2d(32, 32, 3, stride=1, padding=1)
+        self.down1 = down(32, 64, 5, False, latent_dim, spatial_size=256)    # 128
+        self.down2 = down(64, 128, 3, False, latent_dim, spatial_size=128)   # 64
+        self.down3 = down(128, 256, 3, False, latent_dim, spatial_size=64)  # 32
+        self.down4 = down(256, 512, 3, False, latent_dim, spatial_size=32)  # 16
+        self.down5 = down(512, 512, 3, False, latent_dim, spatial_size=16)  # 8
+        self.down6 = down(512, 512, 3, False, latent_dim, spatial_size=8)  # 4
+        self.down7 = down(512, 512, 3, False, latent_dim, spatial_size=4)  # 2
+        self.down8 = down(512, 512, 3, False, latent_dim, spatial_size=2)  # 1
+
+        self.fc1 = nn.Linear(latent_dim * 9, latent_dim)
+        self.fc2 = nn.Linear(latent_dim, latent_dim)
+
+    def forward(self, x):
+        x = F.leaky_relu(self.conv1(x), negative_slope=0.1)
+        s0 = F.leaky_relu(self.conv2(x), negative_slope=0.1)
+        s1, l1 = self.down1(s0)
+        s2, l2 = self.down2(s1)
+        s3, l3 = self.down3(s2)
+        s4, l4 = self.down4(s3)
+        s5, l5 = self.down5(s4)
+        s6, l6 = self.down6(s5)
+        s7, l7 = self.down7(s6)
+        s8, l8 = self.down8(s7)
+
+        latents = torch.cat([s8, l1, l2, l3, l4, l5, l6, l7, l8], dim=1)[:, :, 0, 0]
+
+        latents = F.leaky_relu(self.fc1(latents), negative_slope=0.1)
+        full_latent = self.fc2(latents)
+
+        return full_latent
+
