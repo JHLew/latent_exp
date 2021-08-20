@@ -1,4 +1,5 @@
-from vit_pytorch.vit import Transformer
+# from vit_pytorch.vit import Transformer, Attention, FeedForward
+from torch import einsum
 from einops import repeat, rearrange
 from einops.layers.torch import Rearrange
 import torch.nn as nn
@@ -60,6 +61,79 @@ def postprocess(t):
 #         x = self.to_latent(x)
 #         return self.mlp_head(x)
 
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.fn = fn
+
+    def forward(self, x, **kwargs):
+        return self.fn(self.norm(x), **kwargs)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, dim, hidden_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class Attention(nn.Module):
+    def __init__(self, dim, heads=8, dim_head=64):
+        super().__init__()
+        inner_dim = dim_head * heads
+        project_out = not (heads == 1 and dim_head == dim)
+
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+
+        self.attend = nn.Softmax(dim=-1)
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim),
+        ) if project_out else nn.Identity()
+
+    def forward(self, x):
+        b, n, _, h = *x.shape, self.heads
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
+
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+
+        attn = self.attend(dots)
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        return self.to_out(out)
+
+
+class Transformer(nn.Module):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim):
+        super().__init__()
+        self.layers = nn.ModuleList([])
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head)),
+                PreNorm(dim, FeedForward(dim, mlp_dim))
+            ]))
+
+    def forward(self, x):
+        mid_feats = []  # custom
+        for attn, ff in self.layers:
+            x = attn(x) + x
+            x = ff(x) + x
+            mid_feats.append(x)  # custom
+        # x = torch.stack(mid_feats, dim=2)  # custom
+        x = torch.cat(mid_feats, dim=2)  # custom
+        return x
+
 
 class My_ViT(nn.Module):
     def __init__(self, latent_dim, hidden_dim, ff_dim, depth, heads, mlp_dim, patch_size=4, channels=3, dim_head=64, fill_mismatch='pad'):
@@ -77,11 +151,13 @@ class My_ViT(nn.Module):
 
         self.latent_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
-        self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim, dropout=0)
+        self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim)
 
         self.mlp_head = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, latent_dim)
+            # nn.LayerNorm(hidden_dim),
+            nn.LayerNorm(hidden_dim * depth),
+            # nn.Linear(hidden_dim, latent_dim)
+            nn.Linear(hidden_dim * depth, latent_dim)
         )
 
         self.fill_mismatch = fill_mismatch
