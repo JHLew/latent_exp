@@ -115,7 +115,7 @@ class Attention(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim, mid_feats='cat'):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim):
         super().__init__()
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -124,8 +124,6 @@ class Transformer(nn.Module):
                 PreNorm(dim, FeedForward(dim, mlp_dim))
             ]))
 
-        self.mid_feats = mid_feats
-
     def forward(self, x):
         mid_feats = []  # custom
         for attn, ff in self.layers:
@@ -133,10 +131,7 @@ class Transformer(nn.Module):
             x = ff(x) + x
             mid_feats.append(x)  # custom
 
-        if self.mid_feats == 'cat':
-            x = torch.cat(mid_feats, dim=2)  # custom
-        else:
-            x = torch.stack(mid_feats, dim=2)  # custom
+        x = torch.cat(mid_feats, dim=2)  # custom
 
         return x
 
@@ -159,12 +154,12 @@ class My_ViT(nn.Module):
 
         self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim)
 
-        self.mlp_head = nn.Sequential(
-            # nn.LayerNorm(hidden_dim),
-            nn.LayerNorm(hidden_dim * depth),
-            # nn.Linear(hidden_dim, latent_dim)
-            nn.Linear(hidden_dim * depth, latent_dim)
-        )
+        # self.mlp_head = nn.Sequential(
+        #     # nn.LayerNorm(hidden_dim),
+        #     nn.LayerNorm(hidden_dim * depth),
+        #     # nn.Linear(hidden_dim, latent_dim)
+        #     nn.Linear(hidden_dim * depth, latent_dim)
+        # )
 
         self.fill_mismatch = fill_mismatch
 
@@ -352,10 +347,14 @@ class MLP_G_dummy(nn.Module):
         self.act = nn.GELU()
 
     def forward(self, x, ff):
-        b, m, d = x.shape  # batch, mid-features, dimensions
+        b, h, w, d = ff.shape
+        y = rearrange(ff, 'b h w d -> b (h w) d')
+
+        b, md = x.shape
+        x = rearrange(x, 'b (m d) -> b m d', d=d)
+        m = int(md / d)  # number of layers
         layer_weights = self.w_mapping(x)  # b m (d d)
-        b, h, w, f = ff.shape
-        y = rearrange(ff, 'b h w f -> b (h w) f')
+
         for i in range(m):
             i_weight = layer_weights[:, i]
             i_weight = rearrange(i_weight, 'b (c1 c2) -> b c1 c2', c1=d, c2=d)
