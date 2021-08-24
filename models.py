@@ -115,7 +115,7 @@ class Attention(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, mid_feats='cat'):
         super().__init__()
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -124,14 +124,20 @@ class Transformer(nn.Module):
                 PreNorm(dim, FeedForward(dim, mlp_dim))
             ]))
 
+        self.mid_feats = mid_feats
+
     def forward(self, x):
         mid_feats = []  # custom
         for attn, ff in self.layers:
             x = attn(x) + x
             x = ff(x) + x
             mid_feats.append(x)  # custom
-        # x = torch.stack(mid_feats, dim=2)  # custom
-        x = torch.cat(mid_feats, dim=2)  # custom
+
+        if self.mid_feats == 'cat':
+            x = torch.cat(mid_feats, dim=2)  # custom
+        else:
+            x = torch.stack(mid_feats, dim=2)  # custom
+
         return x
 
 
@@ -195,11 +201,11 @@ class My_ViT(nn.Module):
         latent_tokens = repeat(self.latent_token, '() n d -> b n d', b=b)
         x = torch.cat((latent_tokens, x), dim=1)
 
-        x = self.transformer(x)
+        x = self.transformer(x)  # batch, n_patches, latents
 
-        x = x[:, 0]
+        x = x[:, 0]  # pick latent of 'cls'(latent) token
 
-        x = self.mlp_head(x)
+        # x = self.mlp_head(x)
         return x, ff
 
 
@@ -327,3 +333,36 @@ def uniform_coordinates(h, w, _range=(-1, 1), flatten=True):
 
     return mgrid.detach()
 
+
+# MLP generator, but gets weight from the encoder.
+class MLP_G_dummy(nn.Module):
+    def __init__(self, latent_dim, output_channels=3):
+        super(MLP_G_dummy, self).__init__()
+        self.w_mapping = nn.Sequential(
+            # nn.Linear(latent_dim, latent_dim),
+            # nn.GELU(),
+            nn.Linear(latent_dim, latent_dim * latent_dim),
+        )
+
+        self.out = nn.Sequential(
+            # nn.Linear(latent_dim, latent_dim),
+            # nn.GELU(),
+            nn.Linear(latent_dim, output_channels)
+        )
+        self.act = nn.GELU()
+
+    def forward(self, x, ff):
+        b, m, d = x.shape  # batch, mid-features, dimensions
+        layer_weights = self.w_mapping(x)  # b m (d d)
+        b, h, w, f = ff.shape
+        y = rearrange(ff, 'b h w f -> b (h w) f')
+        for i in range(m):
+            i_weight = layer_weights[:, i]
+            i_weight = rearrange(i_weight, 'b (c1 c2) -> b c1 c2', c1=d, c2=d)
+            y = torch.bmm(y, i_weight)
+            y = self.act(y)
+
+        y = self.out(y)
+        y = rearrange(y, 'b (h w) c -> b c h w', h=h, w=w)
+
+        return y
