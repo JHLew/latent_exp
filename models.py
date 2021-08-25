@@ -120,8 +120,10 @@ class Transformer(nn.Module):
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head)),
-                PreNorm(dim, FeedForward(dim, mlp_dim))
+                # PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head)),
+                Attention(dim, heads=heads, dim_head=dim_head),
+                # PreNorm(dim, FeedForward(dim, mlp_dim))
+                FeedForward(dim, mlp_dim)
             ]))
 
     def forward(self, x):
@@ -130,19 +132,38 @@ class Transformer(nn.Module):
             x = attn(x) + x
             x = ff(x) + x
             mid_feats.append(x)  # custom
-
         x = torch.cat(mid_feats, dim=2)  # custom
-
         return x
 
 
 class My_ViT(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, ff_dim, depth, heads, mlp_dim, patch_size=4, channels=3, dim_head=64, fill_mismatch='pad'):
+    def __init__(self, latent_dim, hidden_dim, ff_dim, depth, heads, mlp_dim, patch_size=8, channels=3, dim_head=64, fill_mismatch='pad'):
         super(My_ViT, self).__init__()
         self.patch_size = patch_size
+        # self.to_patch_embedding = nn.Sequential(
+        #     Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
+        #     nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim)
+        # )
+
+        # self.to_patch_embedding = nn.Sequential(
+        #     Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
+        #     nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim),
+        #     nn.GELU(),
+        #     nn.Linear(hidden_dim, hidden_dim)
+        # )
+
         self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
-            nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim)
+            # Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
+            Rearrange('b c (h p1) (w p2) -> (b h w) c p1 p2', p1=patch_size, p2=patch_size),
+            nn.Conv2d(channels + ff_dim, ff_dim, 3, 1),  # 8 x 8 -> 6 x 6
+            nn.GELU(),
+            nn.Conv2d(ff_dim, ff_dim, 3, 1),  # 6 x 6 -> 4 x 4
+            nn.GELU(),
+            nn.Conv2d(ff_dim, ff_dim, 3, 1),  # 4 x 4 -> 2 x 2
+            nn.GELU(),
+            nn.Conv2d(ff_dim, ff_dim, 2, 1),
+            nn.GELU(),
+            nn.Conv2d(ff_dim, hidden_dim, 1, 1),
         )
 
         spatial_dim = 2
@@ -154,12 +175,12 @@ class My_ViT(nn.Module):
 
         self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim)
 
-        # self.mlp_head = nn.Sequential(
-        #     # nn.LayerNorm(hidden_dim),
-        #     nn.LayerNorm(hidden_dim * depth),
-        #     # nn.Linear(hidden_dim, latent_dim)
-        #     nn.Linear(hidden_dim * depth, latent_dim)
-        # )
+        self.mlp_head = nn.Sequential(
+            # nn.LayerNorm(hidden_dim),
+            # nn.LayerNorm(hidden_dim * depth),
+            # nn.Linear(hidden_dim, latent_dim)
+            nn.Linear(hidden_dim * depth, latent_dim),
+        )
 
         self.fill_mismatch = fill_mismatch
 
@@ -191,6 +212,7 @@ class My_ViT(nn.Module):
         x = torch.cat([img, bchw_ff], dim=1)
 
         x = self.to_patch_embedding(x)
+        x = rearrange(x, '(b n) c s1 s2 -> b n c (s1 s2)', b=b)[:, :, :, 0]  # when using conv embedding
         b, n, _ = x.shape
 
         latent_tokens = repeat(self.latent_token, '() n d -> b n d', b=b)
@@ -200,7 +222,7 @@ class My_ViT(nn.Module):
 
         x = x[:, 0]  # pick latent of 'cls'(latent) token
 
-        # x = self.mlp_head(x)
+        x = self.mlp_head(x)
         return x, ff
 
 
@@ -334,14 +356,14 @@ class MLP_G_dummy(nn.Module):
     def __init__(self, latent_dim, output_channels=3):
         super(MLP_G_dummy, self).__init__()
         self.w_mapping = nn.Sequential(
-            # nn.Linear(latent_dim, latent_dim),
-            # nn.GELU(),
+            nn.Linear(latent_dim, latent_dim),
+            nn.GELU(),
             nn.Linear(latent_dim, latent_dim * latent_dim),
         )
 
         self.out = nn.Sequential(
-            # nn.Linear(latent_dim, latent_dim),
-            # nn.GELU(),
+            nn.Linear(latent_dim, latent_dim),
+            nn.GELU(),
             nn.Linear(latent_dim, output_channels)
         )
         self.act = nn.GELU()

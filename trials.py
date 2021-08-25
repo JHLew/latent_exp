@@ -30,16 +30,16 @@ def train(save_path):
     loss_type = 'MSE'
 
     # shared params
-    latent_dim = 1024
-    ff_dim = 256
+    latent_dim = 1024  # 1024
+    ff_dim = 256  # 256
 
     # ViT params: ViT-Base / 16
     # ViT params: ViT-Large / 16
-    vit_layers = 24  # 12
-    vit_hidden_dim = 1024  # 768
-    vit_mlp_dim = 4096  # 3072
-    vit_heads = 16  # 12
-    vit_patch_size = 16
+    vit_layers = 6  # 12
+    vit_hidden_dim = 768  # 768
+    vit_mlp_dim = 3072  # 3072
+    vit_heads = 12  # 12
+    vit_patch_size = 8
 
     # INR params: SIREN with activations as GELU instead of sine.
     inr_layers = 5
@@ -58,6 +58,7 @@ def train(save_path):
     # model = modulated_UPNet(vgg, latent_dim, 3)
 
     INR_G = MLP_Generator(num_layers=inr_layers, latent_dim=latent_dim, ff_dim=ff_dim, hidden_dim=inr_hidden_dim)
+    # INR_G = MLP_G_dummy(latent_dim=latent_dim)
     model = Wrapper(vit, INR_G)
 
     # use multi-gpu
