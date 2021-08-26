@@ -16,51 +16,6 @@ def postprocess(t):
     return torch.clamp((t + 1) / 2, min=0, max=1)
 
 
-# class Orig_ViT(nn.Module):
-#     def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, pool='cls', channels=3, dim_head=64, dropout=0., emb_dropout=0.):
-#         super().__init__()
-#         image_height, image_width = pair(image_size)
-#         patch_height, patch_width = pair(patch_size)
-#
-#         assert image_height % patch_height == 0 and image_width % patch_width == 0, 'Image dimensions must be divisible by the patch size.'
-#
-#         num_patches = (image_height // patch_height) * (image_width // patch_width)
-#         patch_dim = channels * patch_height * patch_width
-#         assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
-#
-#         self.to_patch_embedding = nn.Sequential(
-#             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = patch_height, p2 = patch_width),
-#             nn.Linear(patch_dim, dim),
-#         )
-#
-#         self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
-#         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
-#         self.dropout = nn.Dropout(emb_dropout)
-#
-#         self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
-#
-#         self.pool = pool
-#         self.to_latent = nn.Identity()
-#
-#         self.mlp_head = nn.Sequential(
-#             nn.LayerNorm(dim),
-#             nn.Linear(dim, num_classes)
-#         )
-#
-#     def forward(self, img):
-#         x = self.to_patch_embedding(img)
-#         b, n, _ = x.shape
-#
-#         cls_tokens = repeat(self.cls_token, '() n d -> b n d', b = b)
-#         x = torch.cat((cls_tokens, x), dim=1)
-#         x += self.pos_embedding[:, :(n + 1)]
-#         x = self.dropout(x)
-#         x = self.transformer(x)
-#         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
-#
-#         x = self.to_latent(x)
-#         return self.mlp_head(x)
-
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -82,6 +37,14 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class Sine(nn.Module):
+    def __init__(self):
+        super(Sine, self).__init__()
+
+    def forward(self, x):
+        return torch.sin(x)
 
 
 class Attention(nn.Module):
@@ -127,12 +90,12 @@ class Transformer(nn.Module):
             ]))
 
     def forward(self, x):
-        mid_feats = []  # custom
+        # mid_feats = []  # custom
         for attn, ff in self.layers:
             x = attn(x) + x
             x = ff(x) + x
-            mid_feats.append(x)  # custom
-        x = torch.cat(mid_feats, dim=2)  # custom
+            # mid_feats.append(x)  # custom
+        # x = torch.cat(mid_feats, dim=2)  # custom
         return x
 
 
@@ -140,10 +103,10 @@ class My_ViT(nn.Module):
     def __init__(self, latent_dim, hidden_dim, ff_dim, depth, heads, mlp_dim, patch_size=8, channels=3, dim_head=64, fill_mismatch='pad'):
         super(My_ViT, self).__init__()
         self.patch_size = patch_size
-        # self.to_patch_embedding = nn.Sequential(
-        #     Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
-        #     nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim)
-        # )
+        self.to_patch_embedding = nn.Sequential(
+            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
+            nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim)
+        )
 
         # self.to_patch_embedding = nn.Sequential(
         #     Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
@@ -152,24 +115,25 @@ class My_ViT(nn.Module):
         #     nn.Linear(hidden_dim, hidden_dim)
         # )
 
-        self.to_patch_embedding = nn.Sequential(
-            # Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
-            Rearrange('b c (h p1) (w p2) -> (b h w) c p1 p2', p1=patch_size, p2=patch_size),
-            nn.Conv2d(channels + ff_dim, ff_dim, 3, 1),  # 8 x 8 -> 6 x 6
-            nn.GELU(),
-            nn.Conv2d(ff_dim, ff_dim, 3, 1),  # 6 x 6 -> 4 x 4
-            nn.GELU(),
-            nn.Conv2d(ff_dim, ff_dim, 3, 1),  # 4 x 4 -> 2 x 2
-            nn.GELU(),
-            nn.Conv2d(ff_dim, ff_dim, 2, 1),
-            nn.GELU(),
-            nn.Conv2d(ff_dim, hidden_dim, 1, 1),
-        )
+        # self.to_patch_embedding = nn.Sequential(
+        #     # Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
+        #     Rearrange('b c (h p1) (w p2) -> (b h w) c p1 p2', p1=patch_size, p2=patch_size),
+        #     nn.Conv2d(channels + ff_dim, ff_dim, 3, 1),  # 8 x 8 -> 6 x 6
+        #     nn.GELU(),
+        #     nn.Conv2d(ff_dim, ff_dim, 3, 1),  # 6 x 6 -> 4 x 4
+        #     nn.GELU(),
+        #     nn.Conv2d(ff_dim, ff_dim, 3, 1),  # 4 x 4 -> 2 x 2
+        #     nn.GELU(),
+        #     nn.Conv2d(ff_dim, ff_dim, 2, 1),
+        #     nn.GELU(),
+        #     nn.Conv2d(ff_dim, hidden_dim, 1, 1),
+        # )
 
         spatial_dim = 2
         sigma = 10
         assert ff_dim % 2 == 0, 'Fourier features should be divided by 2.'
         self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim // 2)) * sigma)
+        self.pos_embedding.requires_grad = False
 
         self.latent_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
@@ -178,8 +142,12 @@ class My_ViT(nn.Module):
         self.mlp_head = nn.Sequential(
             # nn.LayerNorm(hidden_dim),
             # nn.LayerNorm(hidden_dim * depth),
-            # nn.Linear(hidden_dim, latent_dim)
-            nn.Linear(hidden_dim * depth, latent_dim),
+            nn.Linear(hidden_dim, latent_dim),
+            # nn.Linear(hidden_dim * depth, latent_dim),
+            nn.GELU(),
+            nn.Linear(latent_dim, latent_dim),
+            # nn.GELU(),
+            # nn.Linear(latent_dim, latent_dim),
         )
 
         self.fill_mismatch = fill_mismatch
@@ -212,7 +180,7 @@ class My_ViT(nn.Module):
         x = torch.cat([img, bchw_ff], dim=1)
 
         x = self.to_patch_embedding(x)
-        x = rearrange(x, '(b n) c s1 s2 -> b n c (s1 s2)', b=b)[:, :, :, 0]  # when using conv embedding
+        # x = rearrange(x, '(b n) c s1 s2 -> b n c (s1 s2)', b=b)[:, :, :, 0]  # when using conv embedding
         b, n, _ = x.shape
 
         latent_tokens = repeat(self.latent_token, '() n d -> b n d', b=b)
@@ -236,6 +204,7 @@ class MLP_Norm(nn.Module):
         )
         self.gamma_predictor = nn.Linear(out_dim, out_dim)
         self.beta_predictor = nn.Linear(out_dim, out_dim)
+        self.norm = nn.LayerNorm(out_dim)
 
     def forward(self, x, latent):
         shared_f = self.shared(latent)
@@ -246,7 +215,8 @@ class MLP_Norm(nn.Module):
         gamma = gamma.unsqueeze(1).unsqueeze(1)
         beta = beta.unsqueeze(1).unsqueeze(1)
 
-        x = x * gamma + beta
+        # x = x * gamma + beta
+        x = self.norm(x) * gamma + beta
 
         return x
 
@@ -259,13 +229,19 @@ class MLP_Generator(nn.Module):
         norm_layers = []
         self.act = nn.GELU()
         self.channel_first = channel_first
-        # self.norm_shared = nn.Sequential(
-        #     nn.Linear(latent_dim, hidden_dim),
-        #     nn.GELU()
+
+        # self.w_mapping = nn.Sequential(
+        #     nn.Linear(latent_dim, latent_dim),
+        #     nn.GELU(),
+        #     nn.Linear(latent_dim, latent_dim),
+        #     nn.GELU(),
+        #     nn.Linear(latent_dim, latent_dim)
         # )
+
         for i in range(self.num_layers):
             if i == 0:  # first layer
                 layers.append(nn.Linear(ff_dim, hidden_dim))
+                # layers.append(nn.Linear(ff_dim + latent_dim, hidden_dim))
                 norm_layers.append(MLP_Norm(latent_dim, hidden_dim))
 
             elif i == self.num_layers - 1:  # final layer
@@ -293,8 +269,13 @@ class MLP_Generator(nn.Module):
     #     return postprocess(x)
 
     def forward(self, latent, ff):
+        # if use w mapping
+        # mapped_w = self.w_mapping(latent)
+        # b, h, w, d = ff.shape
+        # mapped_w = repeat(mapped_w, 'b d -> b h w d', h=h, w=w)
+        # ff = torch.cat([mapped_w, ff], dim=3)
+
         x = self.layers[0](ff)
-        # latent_shared = self.norm_shared(latent)
         for i in range(self.num_layers - 1):
             res = x
             x = self.norm_layers[i](x, latent)
