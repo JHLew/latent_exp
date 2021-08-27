@@ -83,10 +83,10 @@ class Transformer(nn.Module):
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                # PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head)),
-                Attention(dim, heads=heads, dim_head=dim_head),
-                # PreNorm(dim, FeedForward(dim, mlp_dim))
-                FeedForward(dim, mlp_dim)
+                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head)),
+                # Attention(dim, heads=heads, dim_head=dim_head),
+                PreNorm(dim, FeedForward(dim, mlp_dim))
+                # FeedForward(dim, mlp_dim)
             ]))
 
     def forward(self, x):
@@ -105,7 +105,7 @@ class My_ViT(nn.Module):
         self.patch_size = patch_size
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
-            nn.Linear((channels + ff_dim) * patch_size * patch_size, hidden_dim)
+            nn.Linear((channels + ff_dim * 2) * patch_size * patch_size, hidden_dim)
         )
 
         # self.to_patch_embedding = nn.Sequential(
@@ -131,23 +131,23 @@ class My_ViT(nn.Module):
 
         spatial_dim = 2
         sigma = 10
-        assert ff_dim % 2 == 0, 'Fourier features should be divided by 2.'
-        self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim // 2)) * sigma)
+        # assert ff_dim % 2 == 0, 'Fourier features should be divided by 2.'
+        self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim)) * sigma)
         self.pos_embedding.requires_grad = False
 
         self.latent_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
         self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim)
 
+        self.to_latent = Attention(dim=hidden_dim, heads=1, dim_head=hidden_dim)
+
         self.mlp_head = nn.Sequential(
-            # nn.LayerNorm(hidden_dim),
             # nn.LayerNorm(hidden_dim * depth),
-            nn.Linear(hidden_dim, latent_dim),
             # nn.Linear(hidden_dim * depth, latent_dim),
+            # nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(latent_dim, latent_dim),
-            # nn.GELU(),
-            # nn.Linear(latent_dim, latent_dim),
+            nn.Linear(hidden_dim, latent_dim),
         )
 
         self.fill_mismatch = fill_mismatch
@@ -188,10 +188,11 @@ class My_ViT(nn.Module):
 
         x = self.transformer(x)  # batch, n_patches, latents
 
+        x = self.to_latent(x)
         x = x[:, 0]  # pick latent of 'cls'(latent) token
 
         x = self.mlp_head(x)
-        return x, ff
+        return x, (h, w)
 
 
 class MLP_Norm(nn.Module):
@@ -199,11 +200,11 @@ class MLP_Norm(nn.Module):
         super(MLP_Norm, self).__init__()
 
         self.shared = nn.Sequential(
-            nn.Linear(in_dim, out_dim),
+            nn.Linear(in_dim, in_dim),
             nn.GELU()
         )
-        self.gamma_predictor = nn.Linear(out_dim, out_dim)
-        self.beta_predictor = nn.Linear(out_dim, out_dim)
+        self.gamma_predictor = nn.Linear(in_dim, out_dim)
+        self.beta_predictor = nn.Linear(in_dim, out_dim)
         self.norm = nn.LayerNorm(out_dim)
 
     def forward(self, x, latent):
@@ -229,18 +230,17 @@ class MLP_Generator(nn.Module):
         norm_layers = []
         self.act = nn.GELU()
         self.channel_first = channel_first
+        self.ff_dim = ff_dim
 
-        # self.w_mapping = nn.Sequential(
-        #     nn.Linear(latent_dim, latent_dim),
-        #     nn.GELU(),
-        #     nn.Linear(latent_dim, latent_dim),
-        #     nn.GELU(),
-        #     nn.Linear(latent_dim, latent_dim)
-        # )
+        self.ff_mapping = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.GELU(),
+            nn.Linear(latent_dim, ff_dim * 2),  # when target is 2d image.
+        )
 
         for i in range(self.num_layers):
             if i == 0:  # first layer
-                layers.append(nn.Linear(ff_dim, hidden_dim))
+                layers.append(nn.Linear(ff_dim * 2, hidden_dim))
                 # layers.append(nn.Linear(ff_dim + latent_dim, hidden_dim))
                 norm_layers.append(MLP_Norm(latent_dim, hidden_dim))
 
@@ -268,27 +268,42 @@ class MLP_Generator(nn.Module):
     #
     #     return postprocess(x)
 
-    def forward(self, latent, ff):
+    # def forward(self, latent, ff):
+    def forward(self, latent, size):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # if use w mapping
         # mapped_w = self.w_mapping(latent)
         # b, h, w, d = ff.shape
         # mapped_w = repeat(mapped_w, 'b d -> b h w d', h=h, w=w)
         # ff = torch.cat([mapped_w, ff], dim=3)
+        h, w = size
+        b, _ = latent.shape
+        B = self.ff_mapping(latent)
+        B = rearrange(B, 'b (ffin ffout) -> b ffin ffout', ffin=2, ffout=self.ff_dim)
+        rel_pos = uniform_coordinates(h, w, flatten=False).unsqueeze(0).to(device)
+        rel_pos = repeat(rel_pos, '() h w c -> b h w c', b=b)
+        rel_pos = rearrange(rel_pos, 'b h w c -> b (h w) c')
+        ff = self.map_ff(rel_pos, B)
+        ff = rearrange(ff, 'b (h w) c -> b h w c', h=h, w=w)
 
         x = self.layers[0](ff)
         for i in range(self.num_layers - 1):
-            res = x
+            # res = x
             x = self.norm_layers[i](x, latent)
             # x = self.norm_layers[i](x, latent_shared)
             x = self.act(x)
             x = self.layers[i + 1](x)
-            if i < self.num_layers - 2:
-                x = res + x
+            # if i < self.num_layers - 2:
+            #     x = res + x
 
         if self.channel_first:
             x = rearrange(x, 'b h w c -> b c h w')
 
         return postprocess(x)
+
+    def map_ff(self, x, B):
+        x_proj = torch.bmm((2 * np.pi * x), B)
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
 
 class Wrapper(nn.Module):
