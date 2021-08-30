@@ -16,34 +16,36 @@ from torchvision.models.resnet import resnet18
 
 
 def train(save_path):
-    exp_name = 'ViT_INR'
+    exp_name = 'p8_ff64_ld4096_h20_inr5128'
     # device setting
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # hyper parameters
     resume = 0  # 0 for fresh training, else resume from pretraining.
-    n_epochs = 2500
-    batch_size = 16
-    lr = 1e-4
+    n_epochs = 5000
+    batch_size = 32
+    lr = 1e-5
     batch_res = 256
     valid_every = 20
     loss_type = 'MSE'
 
     # shared params
-    latent_dim = 1024  # 1024
-    ff_dim = 256  # 256
+    latent_dim = 4096  # 1216  # orig: 1024, current: 8x8x(3+16)
+    ff_dim = 64  # 256
 
     # ViT params: ViT-Base / 16
-    # ViT params: ViT-Large / 16
     vit_layers = 6  # 12
-    vit_hidden_dim = 768  # 768
-    vit_mlp_dim = 3072  # 3072
-    vit_heads = 12  # 12
     vit_patch_size = 8
+    vit_heads = 20  # 12
+
+    # vit_hidden_dim = 768  # 768
+    vit_mlp_dim = 2048  # 3072
+    vit_hidden_dim = (vit_patch_size ** 2) * 7
+    print('Main dimension:', vit_hidden_dim)
 
     # INR params: SIREN with activations as GELU instead of sine.
     inr_layers = 5
-    inr_hidden_dim = 256
+    inr_hidden_dim = 128
 
     # models
     # vit = ViT(image_size=256, patch_size=16, num_classes=latent_dim, dim=vit_hidden_dim, depth=vit_layers,

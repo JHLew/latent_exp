@@ -90,12 +90,12 @@ class Transformer(nn.Module):
             ]))
 
     def forward(self, x):
-        # mid_feats = []  # custom
+        mid_feats = []  # custom
         for attn, ff in self.layers:
             x = attn(x) + x
             x = ff(x) + x
-            # mid_feats.append(x)  # custom
-        # x = torch.cat(mid_feats, dim=2)  # custom
+            mid_feats.append(x)  # custom
+        x = torch.cat(mid_feats, dim=2)  # custom
         return x
 
 
@@ -105,7 +105,7 @@ class My_ViT(nn.Module):
         self.patch_size = patch_size
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size),
-            nn.Linear((channels + ff_dim * 2) * patch_size * patch_size, hidden_dim)
+            nn.Linear((channels + 2 * 2) * patch_size * patch_size, hidden_dim)
         )
 
         # self.to_patch_embedding = nn.Sequential(
@@ -129,31 +129,32 @@ class My_ViT(nn.Module):
         #     nn.Conv2d(ff_dim, hidden_dim, 1, 1),
         # )
 
-        spatial_dim = 2
-        sigma = 10
+        # spatial_dim = 2
+        # sigma = 10
         # assert ff_dim % 2 == 0, 'Fourier features should be divided by 2.'
-        self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim)) * sigma)
-        self.pos_embedding.requires_grad = False
+        # self.pos_embedding = nn.Parameter(torch.randn((spatial_dim, ff_dim)) * sigma)
+        # self.pos_embedding.requires_grad = False
 
         self.latent_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
         self.transformer = Transformer(hidden_dim, depth, heads, dim_head, mlp_dim)
 
-        self.to_latent = Attention(dim=hidden_dim, heads=1, dim_head=hidden_dim)
+        # self.to_latent = Attention(dim=hidden_dim, heads=1, dim_head=hidden_dim)
 
         self.mlp_head = nn.Sequential(
             # nn.LayerNorm(hidden_dim * depth),
-            # nn.Linear(hidden_dim * depth, latent_dim),
+            nn.Linear(hidden_dim * depth, hidden_dim * depth),
             # nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
+            # nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim, latent_dim),
+            nn.Linear(hidden_dim * depth, latent_dim),
         )
 
         self.fill_mismatch = fill_mismatch
 
     def map_ff(self, x):
-        x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
+        # x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
+        x_proj = (2 * np.pi * x)
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
     def forward(self, img):
@@ -188,7 +189,7 @@ class My_ViT(nn.Module):
 
         x = self.transformer(x)  # batch, n_patches, latents
 
-        x = self.to_latent(x)
+        # x = self.to_latent(x)
         x = x[:, 0]  # pick latent of 'cls'(latent) token
 
         x = self.mlp_head(x)
