@@ -154,7 +154,8 @@ class My_ViT(nn.Module):
 
     def map_ff(self, x):
         # x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
-        x_proj = (2 * np.pi * x)
+        # x_proj = (2 * np.pi * x)
+        x_proj = (np.pi * x)
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
     def forward(self, img):
