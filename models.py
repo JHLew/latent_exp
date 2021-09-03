@@ -153,9 +153,8 @@ class My_ViT(nn.Module):
         self.fill_mismatch = fill_mismatch
 
     def map_ff(self, x):
-        # x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
+        x_proj = torch.matmul((2 * np.pi * x), self.pos_embedding)
         # x_proj = (2 * np.pi * x)
-        x_proj = (np.pi * x)
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
     def forward(self, img):
@@ -177,8 +176,9 @@ class My_ViT(nn.Module):
         # rel_pos = repeat(rel_pos, '() c h w -> b c h w', b=b)
         rel_pos = uniform_coordinates(h, w, flatten=False).unsqueeze(0).to(device)
         rel_pos = repeat(rel_pos, '() h w c -> b h w c', b=b)
-        ff = self.map_ff(rel_pos)
-        bchw_ff = rearrange(ff, 'b h w c -> b c h w')
+        # ff = self.map_ff(rel_pos)
+        # bchw_ff = rearrange(ff, 'b h w c -> b c h w')
+        bchw_ff = rearrange(rel_pos, 'b h w c -> b c h w')
         x = torch.cat([img, bchw_ff], dim=1)
 
         x = self.to_patch_embedding(x)
